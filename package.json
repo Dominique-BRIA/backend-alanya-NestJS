@@ -4,7 +4,7 @@
   "description": "Alanya Backend API - NestJS version",
   "private": true,
   "scripts": {
-    "build": "nest build",
+    "build": "npx nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
