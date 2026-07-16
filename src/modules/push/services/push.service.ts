@@ -26,13 +26,22 @@ export class PushService implements OnModuleInit {
 
   private initFirebase() {
     const serviceAccountBase64 = this.configService.get<string>(
-      'app.firebase.serviceAccountBase64',
+        'app.firebase.serviceAccountBase64',
     );
 
     if (serviceAccountBase64) {
       try {
+        // ✅ FIX: Réutiliser l'app existante si déjà initialisée
+        const existingApp = firebaseAdmin.apps.find(app => app.name === '[DEFAULT]');
+        if (existingApp) {
+          this.firebaseApp = existingApp;
+          this.messaging = existingApp.messaging();
+          this.logger.log('Firebase Admin already initialized, reusing existing app');
+          return;
+        }
+
         const serviceAccount = JSON.parse(
-          Buffer.from(serviceAccountBase64, 'base64').toString('utf-8'),
+            Buffer.from(serviceAccountBase64, 'base64').toString('utf-8'),
         );
         this.firebaseApp = firebaseAdmin.initializeApp({
           credential: firebaseAdmin.credential.cert(serviceAccount),
