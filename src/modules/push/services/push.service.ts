@@ -32,7 +32,9 @@ export class PushService implements OnModuleInit {
     if (serviceAccountBase64) {
       try {
         // ✅ FIX: Réutiliser l'app existante si déjà initialisée
-        const existingApp = firebaseAdmin.apps.find(app => app.name === '[DEFAULT]');
+        const existingApp = firebaseAdmin.apps.find(
+            (app): app is firebaseAdmin.app.App => app.name === '[DEFAULT]',
+        );
         if (existingApp) {
           this.firebaseApp = existingApp;
           this.messaging = existingApp.messaging();
@@ -53,7 +55,6 @@ export class PushService implements OnModuleInit {
       }
     }
   }
-
   async registerDevice(userId: string, dto: RegisterDeviceDto) {
     const { token, platform } = dto;
 
