@@ -19,11 +19,11 @@ async function bootstrap() {
   app.enableCors({
     origin: isProd
       ? ['https://alanya.app', 'https://www.alanya.app']
-      : true, // Allow all origins in development
+      : true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     credentials: true,
-    maxAge: 86400, // 24 hours
+    maxAge: 86400,
   });
 
   // Global validation pipe
@@ -40,35 +40,39 @@ async function bootstrap() {
 
   // Swagger documentation (disabled in production)
   if (!isProd) {
-    const swaggerConfig = new DocumentBuilder()
-      .setTitle('Alanya API')
-      .setDescription('API backend pour l\'application Alanya : messagerie temps réel, appels audio/vidéo, stories éphémères et assistant IA')
-      .setVersion('1.0')
-      .addBearerAuth(
-        { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
-        'access-token',
-      )
-      .addTag('Auth', 'Authentification et inscription')
-      .addTag('Users', 'Gestion des utilisateurs')
-      .addTag('Countries', 'Référentiel pays')
-      .addTag('Contacts', 'Gestion des contacts')
-      .addTag('Conversations', 'Messagerie (conversations et messages)')
-      .addTag('Calls', 'Appels audio/vidéo')
-      .addTag('Meetings', 'Réunions planifiées')
-      .addTag('Statuses', 'Stories/Statuts éphémères')
-      .addTag('Media', 'Upload et téléchargement de médias')
-      .addTag('Push', 'Notifications push (FCM)')
-      .addTag('AI', 'Assistant IA (Gemini)')
-      .addTag('Blocked', 'Utilisateurs bloqués')
-      .addTag('Health', 'Health checks')
-      .build();
+    try {
+      const swaggerConfig = new DocumentBuilder()
+        .setTitle('Alanya API')
+        .setDescription('API backend pour l\'application Alanya : messagerie temps réel, appels audio/vidéo, stories éphémères et assistant IA')
+        .setVersion('1.0')
+        .addBearerAuth(
+          { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+          'access-token',
+        )
+        .addTag('Auth', 'Authentification et inscription')
+        .addTag('Users', 'Gestion des utilisateurs')
+        .addTag('Countries', 'Référentiel pays')
+        .addTag('Contacts', 'Gestion des contacts')
+        .addTag('Conversations', 'Messagerie (conversations et messages)')
+        .addTag('Calls', 'Appels audio/vidéo')
+        .addTag('Meetings', 'Réunions planifiées')
+        .addTag('Statuses', 'Stories/Statuts éphémères')
+        .addTag('Media', 'Upload et téléchargement de médias')
+        .addTag('Push', 'Notifications push (FCM)')
+        .addTag('AI', 'Assistant IA (Gemini)')
+        .addTag('Blocked', 'Utilisateurs bloqués')
+        .addTag('Health', 'Health checks')
+        .build();
 
-    const document = SwaggerModule.createDocument(app, swaggerConfig);
-    SwaggerModule.setup('docs', app, document, {
-      swaggerOptions: {
-        persistAuthorization: true,
-      },
-    });
+      const document = SwaggerModule.createDocument(app, swaggerConfig);
+      SwaggerModule.setup('docs', app, document, {
+        swaggerOptions: {
+          persistAuthorization: true,
+        },
+      });
+    } catch (error) {
+      console.warn('Swagger setup failed:', error);
+    }
   }
 
   // Graceful shutdown
