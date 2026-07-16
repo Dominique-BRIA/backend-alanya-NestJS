@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: alanya-postgres
+    environment:
+      POSTGRES_USER: alanya
+      POSTGRES_PASSWORD: alanya
+      POSTGRES_DB: alanya
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alanya -d alanya"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: alanya-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: alanya-api
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://alanya:alanya@postgres:5432/alanya?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-your-super-secret-access-key-min-32-chars}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-your-super-secret-refresh-key-min-32-chars}
+      JWT_ACCESS_TTL: 15m
+      JWT_REFRESH_TTL: 7d
+      OTP_TTL_MINUTES: 10
+      MAIL_PROVIDER: console
+      MAIL_FROM: "Alanya <no-reply@alanya.app>"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: gemini-2.5-flash
+      MEDIA_STORAGE_DIR: ./storage/media
+      MEDIA_MAX_SIZE_MB: 50
+      MEDIA_STORAGE_PROVIDER: local
+      STUN_URLS: stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun.cloudflare.com:3478
+      PUSH_ENABLED: "false"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./storage:/app/storage
+    command: sh -c "npx prisma migrate deploy && npm run start:dev"
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,424 @@
+// Schéma de données Alanya — PostgreSQL + Prisma
+// Dérivé du cahier des charges (Groupe Alanya II), enrichi : numéro public 6 chiffres,
+// statuts éphémères (stories) et IA conversationnelle (Gemini).
+//
+// Conventions (cf. cahier des charges) :
+// - Clés primaires en UUID
+// - Dates en TIMESTAMPTZ (DateTime @db.Timestamptz)
+// - Mots de passe hachés (BCrypt) avant insertion
+// - Index sur les colonnes fréquemment filtrées
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// AUTH & COMPTE
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  email         String   @unique
+  passwordHash  String?  @map("password_hash")
+  publicNumber  String   @unique @db.VarChar(8) @map("public_number")
+  emailVerified Boolean  @default(false) @map("email_verified")
+  createdAt     DateTime @default(now()) @db.Timestamptz @map("created_at")
+  updatedAt     DateTime @updatedAt @db.Timestamptz @map("updated_at")
+
+  // F1 : Inscription avec pays
+  nom      String?  @db.VarChar(100)
+  idPays   Int?     @db.SmallInt @map("id_pays")
+  pays     Pays?    @relation(fields: [idPays], references: [idPays])
+
+  // F3 : Type de compte
+  typeCompte Int @default(0) @db.SmallInt @map("type_compte")
+
+  // F4 : Profil fusionné
+  pseudo      String?  @db.VarChar(100)
+  avatarUrl   String?  @db.VarChar(2048) @map("avatar_url")
+  statusMsg   String?  @db.VarChar(255) @map("status_msg")
+  lastSeen    DateTime? @db.Timestamptz @map("last_seen")
+
+  // F5 : Présence en ligne
+  isOnline    Int @default(0) @db.SmallInt @map("is_online")
+
+  refreshTokens    RefreshToken[]
+  contacts         Contact[]      @relation("UserContacts")
+  contactOf        Contact[]      @relation("ContactOf")
+  participations   Participant[]
+  sentMessages     Message[]      @relation("MessageSender")
+  ownedMedia       MediaFile[]
+  statuses         Status[]
+  statusViews      StatusView[]
+  callsInitiated   Call[]         @relation("CallInitiator")
+  callParticipants CallParticipant[]
+  aiThreads        AiThread[]
+  pushDevices      PushDevice[]
+  messageHides     MessageHide[]
+  messageReads     MessageRead[]
+
+  // Nouvelles relations
+  organizedMeetings      Meeting[]         @relation("MeetingOrganizer")
+  meetingParticipations  MeetingParticipant[] @relation("MeetingParticipantUser")
+  blockedUsers           Blocked[]         @relation("BlockOwner")
+  blockedByUsers         Blocked[]         @relation("BlockedUser")
+
+  @@index([publicNumber])
+  @@map("users")
+}
+
+// Jetons FCM (Firebase Cloud Messaging) pour notifications push mobile/web.
+model PushDevice {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique @db.VarChar(512)
+  platform  String   @db.VarChar(16) // android | ios | web
+  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+  updatedAt DateTime @updatedAt @db.Timestamptz @map("updated_at")
+
+  @@index([userId])
+  @@map("push_devices")
+}
+
+// Codes de vérification email (OTP 6 chiffres) — envoyés via Firebase/email
+model EmailVerification {
+  id        String   @id @default(uuid()) @db.Uuid
+  email     String
+  codeHash  String   @map("code_hash") // hash du code OTP à 6 chiffres (jamais en clair)
+  type      String   @default("verification") // verification | reset_password
+  expiresAt DateTime @db.Timestamptz @map("expires_at")
+  consumed  Boolean  @default(false)
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+
+  @@index([email])
+  @@map("email_verifications")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @map("token_hash") // hash du refresh token
+  expiresAt DateTime @db.Timestamptz @map("expires_at")
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Contact {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  contactId String   @db.Uuid
+  user      User     @relation("UserContacts", fields: [userId], references: [id], onDelete: Cascade)
+  contact   User     @relation("ContactOf", fields: [contactId], references: [id], onDelete: Cascade)
+  alias     String?  @db.VarChar(100) // nom donné par l'utilisateur dans son répertoire
+  isBlocked Boolean  @default(false) @map("is_blocked")
+  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+
+  @@unique([userId, contactId])
+  @@index([userId])
+  @@map("contacts")
+}
+
+// ---------------------------------------------------------------------------
+// MESSAGERIE
+// ---------------------------------------------------------------------------
+
+model Conversation {
+  id        String   @id @default(uuid()) @db.Uuid
+  isGroup   Boolean  @default(false) @map("is_group")
+  name      String?  @db.VarChar(150) // nom du groupe (null pour les conversations directes)
+  avatarUrl String?  @map("avatar_url")
+  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+  updatedAt DateTime @updatedAt @db.Timestamptz @map("updated_at")
+
+  participants Participant[]
+  messages     Message[]
+  calls        Call[]
+  media        MediaFile[]
+
+  @@map("conversations")
+}
+
+enum ParticipantRole {
+  MEMBER
+  ADMIN
+}
+
+model Participant {
+  userId         String   @db.Uuid
+  conversationId String   @db.Uuid
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           ParticipantRole @default(MEMBER)
+  joinedAt       DateTime @default(now()) @db.Timestamptz @map("joined_at")
+  lastReadAt     DateTime? @db.Timestamptz @map("last_read_at")
+
+  @@id([userId, conversationId])
+  @@map("participants")
+}
+
+model Message {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @db.Uuid @map("conversation_id")
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String   @db.Uuid @map("sender_id")
+  sender         User     @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  content        String?  @db.Text
+  type           String   @default("text") @db.VarChar(20) // text | image | video | audio | file | location | contact
+  mediaId        String?  @db.Uuid @map("media_id")
+  media          MediaFile? @relation("MessageMedia", fields: [mediaId], references: [id])
+  replyToId      String?  @db.Uuid @map("reply_to_id")
+  replyTo        Message?   @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies        Message[]  @relation("MessageReply")
+  createdAt      DateTime @default(now()) @db.Timestamptz @map("created_at")
+  updatedAt      DateTime @updatedAt @db.Timestamptz @map("updated_at")
+  deletedAt      DateTime? @db.Timestamptz @map("deleted_at")
+
+  reads     MessageRead[]
+  hides     MessageHide[]
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+  @@map("messages")
+}
+
+model MessageRead {
+  userId    String   @db.Uuid
+  messageId String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  readAt    DateTime @default(now()) @db.Timestamptz @map("read_at")
+
+  @@id([userId, messageId])
+  @@map("message_reads")
+}
+
+model MessageHide {
+  userId    String   @db.Uuid
+  messageId String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  hiddenAt  DateTime @default(now()) @db.Timestamptz @map("hidden_at")
+
+  @@id([userId, messageId])
+  @@map("message_hides")
+}
+
+// ---------------------------------------------------------------------------
+// STATUSES (Stories / Statuts éphémères)
+// ---------------------------------------------------------------------------
+
+model Status {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid @map("user_id")
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content       String?  @db.Text
+  mediaId       String?  @db.Uuid @map("media_id")
+  media         MediaFile? @relation("StatusMedia", fields: [mediaId], references: [id])
+  type          String   @default("text") @db.VarChar(20) // text | image | video
+  backgroundColor String? @db.VarChar(7) @map("background_color") // #RRGGBB
+  expiresAt     DateTime @db.Timestamptz @map("expires_at")
+  createdAt     DateTime @default(now()) @db.Timestamptz @map("created_at")
+
+  views StatusView[]
+
+  @@index([userId, expiresAt])
+  @@map("statuses")
+}
+
+model StatusView {
+  id        String   @id @default(uuid()) @db.Uuid
+  statusId  String   @db.Uuid @map("status_id")
+  status    Status   @relation(fields: [statusId], references: [id], onDelete: Cascade)
+  userId    String   @db.Uuid @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  viewedAt  DateTime @default(now()) @db.Timestamptz @map("viewed_at")
+
+  @@unique([statusId, userId])
+  @@index([userId])
+  @@map("status_views")
+}
+
+// ---------------------------------------------------------------------------
+// APPELS (Calls)
+// ---------------------------------------------------------------------------
+
+enum CallStatus {
+  RINGING
+  ONGOING
+  ENDED
+  DECLINED
+  MISSED
+}
+
+model Call {
+  id             String     @id @default(uuid()) @db.Uuid
+  conversationId String     @db.Uuid @map("conversation_id")
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  initiatorId    String     @db.Uuid @map("initiator_id")
+  initiator      User       @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  type           Int        @db.SmallInt // 1=audio, 2=video
+  status         CallStatus @default(RINGING)
+  sdp            String?    // WebRTC SDP
+  iceCandidates  Json?      @map("ice_candidates") // WebRTC ICE candidates
+  startedAt      DateTime?  @db.Timestamptz @map("started_at")
+  endedAt        DateTime?  @db.Timestamptz @map("ended_at")
+  createdAt      DateTime   @default(now()) @db.Timestamptz @map("created_at")
+
+  participants CallParticipant[]
+
+  @@index([conversationId, status])
+  @@index([initiatorId])
+  @@map("calls")
+}
+
+model CallParticipant {
+  id        String   @id @default(uuid()) @db.Uuid
+  callId    String   @db.Uuid @map("call_id")
+  call      Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  userId    String   @db.Uuid @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    String   @default("RINGING") @db.VarChar(20) // RINGING | CONNECTED | DECLINED | LEFT
+  connectedAt DateTime? @db.Timestamptz @map("connected_at")
+  leftAt    DateTime? @db.Timestamptz @map("left_at")
+
+  @@unique([callId, userId])
+  @@index([userId])
+  @@map("call_participants")
+}
+
+// ---------------------------------------------------------------------------
+// MEDIA FILES
+// ---------------------------------------------------------------------------
+
+model MediaFile {
+  id           String   @id @default(uuid()) @db.Uuid
+  ownerId      String   @db.Uuid @map("owner_id")
+  owner        User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  filename     String   @db.VarChar(255)
+  mimeType     String   @db.VarChar(100) @map("mime_type")
+  size         Int      // en octets
+  provider     String   @default("local") @db.VarChar(20) // local | b2
+  key          String   @db.VarChar(512) // chemin local ou clé S3/B2
+  conversationId String? @db.Uuid @map("conversation_id")
+  conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  messages     Message[]     @relation("MessageMedia")
+  statuses     Status[]      @relation("StatusMedia")
+  createdAt    DateTime @default(now()) @db.Timestamptz @map("created_at")
+
+  @@index([ownerId])
+  @@index([conversationId])
+  @@map("media_files")
+}
+
+// ---------------------------------------------------------------------------
+// IA CONVERSATIONNELLE (Gemini)
+// ---------------------------------------------------------------------------
+
+model AiThread {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String?  @db.VarChar(200)
+  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+  updatedAt DateTime @updatedAt @db.Timestamptz @map("updated_at")
+
+  messages AiMessage[]
+
+  @@index([userId])
+  @@map("ai_threads")
+}
+
+model AiMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  threadId  String   @db.Uuid @map("thread_id")
+  thread    AiThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  role      String   @db.VarChar(20) // user | model
+  content   String   @db.Text
+  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+
+  @@index([threadId, createdAt])
+  @@map("ai_messages")
+}
+
+// ===========================================================================
+// NOUVEAUX MODÈLES — Schéma PDF cible
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// PAYS (référentiel pays — source de vérité pour les indicatifs & fuseaux)
+// ---------------------------------------------------------------------------
+
+model Pays {
+  idPays         Int      @id @default(autoincrement()) @db.SmallInt @map("id_pays")
+  libelle        String   @db.VarChar(200)
+  prefix         String   @db.VarChar(10) // indicatif téléphonique (+237, +33…)
+  timeZone       String   @db.VarChar(200) // ex: "Africa/Douala"
+  decalageHoraire Int     @map("decalage_horaire")
+  users          User[]
+
+  @@map("pays")
+}
+
+// ---------------------------------------------------------------------------
+// MEETINGS (réunions audio/vidéo planifiées)
+// ---------------------------------------------------------------------------
+
+model Meeting {
+  idMeeting   Int    @id @default(autoincrement()) @map("id_meeting")
+  idOrganiser String @db.Uuid @map("id_organiser")
+  organiser   User   @relation("MeetingOrganizer", fields: [idOrganiser], references: [id], onDelete: Cascade)
+  start_time  DateTime @db.Timestamptz @map("start_time")
+  duree       Int    // secondes
+  objet       String @db.VarChar(200)
+  room        String @db.VarChar(200)
+  isEnd       Int    @default(0) @db.SmallInt @map("is_end")
+  type_media  Int    @db.SmallInt @map("type_media") // 1=audio, 2=vidéo
+  participants MeetingParticipant[]
+
+  @@index([idOrganiser])
+  @@map("meeting")
+}
+
+model MeetingParticipant {
+  ID             Int      @id @default(autoincrement())
+  idMeeting      Int      @map("id_meeting")
+  meeting        Meeting  @relation(fields: [idMeeting], references: [idMeeting], onDelete: Cascade)
+  IDparticipant  String   @db.Uuid @map("id_participant")
+  user           User     @relation("MeetingParticipantUser", fields: [IDparticipant], references: [id], onDelete: Cascade)
+  status         Int      @default(0) @db.SmallInt // 0=invité, 1=accepté, 2=décliné
+  start_time     DateTime? @db.Timestamptz @map("start_time")
+  connecte       Int      @default(0) @db.SmallInt // 0=déconnecté, 1=connecté
+  duree          Int?     // secondes
+
+  @@unique([idMeeting, IDparticipant])
+  @@index([IDparticipant])
+  @@map("participant")
+}
+
+// ---------------------------------------------------------------------------
+// BLOCKED (utilisateurs bloqués — indépendant de Contact.isBlocked)
+// ---------------------------------------------------------------------------
+
+model Blocked {
+  idBlock        Int      @id @default(autoincrement()) @map("id_block")
+  alanyaID       String   @db.Uuid @map("alanya_id")
+  owner          User     @relation("BlockOwner", fields: [alanyaID], references: [id], onDelete: Cascade)
+  idCallerBlock  String   @db.Uuid @map("id_caller_block")
+  blockedUser    User     @relation("BlockedUser", fields: [idCallerBlock], references: [id], onDelete: Cascade)
+  dateBlock      DateTime @default(now()) @db.Timestamptz @map("date_block")
+
+  @@unique([alanyaID, idCallerBlock])
+  @@index([alanyaID])
+  @@map("blocked")
+}
