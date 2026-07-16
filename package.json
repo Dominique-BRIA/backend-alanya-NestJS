@@ -26,6 +26,7 @@
     "@aws-sdk/client-s3": "^3.1077.0",
     "@aws-sdk/s3-request-presigner": "^3.1077.0",
     "@google/generative-ai": "^0.24.1",
+    "@nestjs/cli": "^10.4.0",
     "@nestjs/common": "^10.3.0",
     "@nestjs/config": "^3.2.0",
     "@nestjs/core": "^10.3.0",
@@ -53,7 +54,6 @@
     "zod-validation-error": "^5.0.0"
   },
   "devDependencies": {
-    "@nestjs/cli": "^10.4.0",
     "@nestjs/schematics": "^10.1.0",
     "@nestjs/testing": "^10.3.0",
     "@types/bcryptjs": "^2.4.6",
